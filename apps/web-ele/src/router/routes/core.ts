@@ -1,7 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router';
 
-import { DEFAULT_HOME_PATH, LOGIN_PATH } from '@vben/constants';
-
+import { DEFAULT_HOME_PATH, LOGIN_PATH } from '#/constants';
 import { $t } from '#/locales';
 
 const BasicLayout = () => import('#/layouts/basic.vue');
@@ -49,7 +48,8 @@ const coreRoutes: RouteRecordRaw[] = [
     children: [
       {
         name: 'Login',
-        path: 'login',
+        // 使用绝对路径，使登录页 URL 为 /manage/login，同时复用 AuthPageLayout 布局
+        path: '/manage/login',
         component: () => import('#/views/_core/authentication/login.vue'),
         meta: {
           title: $t('page.auth.login'),

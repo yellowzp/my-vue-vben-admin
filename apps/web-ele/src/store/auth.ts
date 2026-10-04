@@ -3,14 +3,21 @@ import type { Recordable, UserInfo } from '@vben/types';
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 
-import { DEFAULT_HOME_PATH, LOGIN_PATH } from '@vben/constants';
 import { resetAllStores, useAccessStore, useUserStore } from '@vben/stores';
 
 import { ElNotification } from 'element-plus';
 import { defineStore } from 'pinia';
 
-import { getAccessCodesApi, getUserInfoApi, loginApi, logoutApi } from '#/api';
+import { loginApi, logoutApi } from '#/api';
+import { DEFAULT_HOME_PATH, LOGIN_PATH } from '#/constants';
 import { $t } from '#/locales';
+
+/**
+ * Session 认证模式下的客户端登录态标记。
+ * 后端使用 JSESSIONID Cookie 维持会话，不再下发 accessToken；
+ * 该标记仅用于路由守卫判断是否已登录，并非真实的鉴权凭证。
+ */
+const SESSION_LOGIN_FLAG = 'session-authenticated';
 
 export const useAuthStore = defineStore('auth', () => {
   const accessStore = useAccessStore();
@@ -28,43 +35,39 @@ export const useAuthStore = defineStore('auth', () => {
     params: Recordable<any>,
     onSuccess?: () => Promise<void> | void,
   ) {
-    // 异步处理用户登录操作并获取 accessToken
+    // 后端采用 Session(JSESSIONID Cookie) 认证，登录成功后不再返回 accessToken。
+    // 只要 loginApi 未抛出异常（响应码为 0），即视为登录成功，会话由 Cookie 维持。
     let userInfo: null | UserInfo = null;
     try {
       loginLoading.value = true;
-      const { accessToken } = await loginApi(params);
+      const loginResult = await loginApi(params);
 
-      // 如果成功获取到 accessToken
-      if (accessToken) {
-        // 将 accessToken 存储到 accessStore 中
-        accessStore.setAccessToken(accessToken);
+      // 标记客户端登录态，供路由守卫判断（真实鉴权依赖 JSESSIONID Cookie，此值非 JWT）
+      accessStore.setAccessToken(SESSION_LOGIN_FLAG);
 
-        // 获取用户信息并存储到 accessStore 中
-        const [fetchUserInfoResult, accessCodes] = await Promise.all([
-          fetchUserInfo(),
-          getAccessCodesApi(),
-        ]);
+      // 直接使用登录接口返回的用户信息，不再请求 /user/info 与 /auth/codes
+      userInfo = {
+        avatar: '',
+        realName: loginResult.username ?? '',
+        userId: loginResult.userUuid ?? '',
+        username: loginResult.username ?? '',
+      } as UserInfo;
+      userStore.setUserInfo(userInfo);
 
-        userInfo = fetchUserInfoResult;
+      if (accessStore.loginExpired) {
+        accessStore.setLoginExpired(false);
+      } else {
+        onSuccess
+          ? await onSuccess?.()
+          : await router.push(userInfo.homePath || DEFAULT_HOME_PATH);
+      }
 
-        userStore.setUserInfo(userInfo);
-        accessStore.setAccessCodes(accessCodes);
-
-        if (accessStore.loginExpired) {
-          accessStore.setLoginExpired(false);
-        } else {
-          onSuccess
-            ? await onSuccess?.()
-            : await router.push(userInfo.homePath || DEFAULT_HOME_PATH);
-        }
-
-        if (userInfo?.realName) {
-          ElNotification({
-            message: `${$t('authentication.loginSuccessDesc')}:${userInfo?.realName}`,
-            title: $t('authentication.loginSuccess'),
-            type: 'success',
-          });
-        }
+      if (userInfo?.realName) {
+        ElNotification({
+          message: `${$t('authentication.loginSuccessDesc')}:${userInfo?.realName}`,
+          title: $t('authentication.loginSuccess'),
+          type: 'success',
+        });
       }
     } finally {
       loginLoading.value = false;
@@ -95,13 +98,6 @@ export const useAuthStore = defineStore('auth', () => {
     });
   }
 
-  async function fetchUserInfo() {
-    let userInfo: null | UserInfo = null;
-    userInfo = await getUserInfoApi();
-    userStore.setUserInfo(userInfo);
-    return userInfo;
-  }
-
   function $reset() {
     loginLoading.value = false;
   }
@@ -109,7 +105,6 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     $reset,
     authLogin,
-    fetchUserInfo,
     loginLoading,
     logout,
   };
